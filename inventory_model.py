@@ -227,3 +227,10 @@ def classify_history(frame: pd.DataFrame) -> pd.DataFrame:
     ]
     out["Phase"] = np.select(conditions, list(PHASES), default="資料不足")
     return out
+
+
+# Streamlit Community Cloud may auto-select this first Python file as the entry
+# point. In that case, hand off rendering to the actual dashboard without
+# affecting normal imports from streamlit_app.py.
+if __name__ == "__main__":
+    import streamlit_app  # noqa: F401, E402
