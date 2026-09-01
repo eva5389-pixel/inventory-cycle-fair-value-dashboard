@@ -233,4 +233,6 @@ def classify_history(frame: pd.DataFrame) -> pd.DataFrame:
 # point. In that case, hand off rendering to the actual dashboard without
 # affecting normal imports from streamlit_app.py.
 if __name__ == "__main__":
-    import streamlit_app  # noqa: F401, E402
+    import runpy
+
+    runpy.run_module("streamlit_app", run_name="__main__")
