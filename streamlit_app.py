@@ -249,11 +249,23 @@ market_score = overall_market_score(cycle.score, valuation_gap, discount_rate, a
 market_label, market_note = score_label(market_score)
 
 st.subheader("目前判定")
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("庫存循環", cycle.phase, cycle.signal)
-m2.metric("市場綜合分數", f"{market_score}/100", market_label)
-m3.metric("雙模型綜合合理價", f"{blend_base_row['綜合合理價']:,.1f}", f"{valuation_gap:+.1f}% vs 現價")
-m4.metric("兩種估值", f"P/E {base_row['合理價格']:,.1f}", f"EV法 {ev_base_row['合理價格']:,.1f}")
+top_left, top_right = st.columns(2)
+top_left.metric("庫存循環", cycle.phase, cycle.signal, border=True)
+top_right.metric("市場綜合分數", f"{market_score}/100", market_label, border=True)
+bottom_left, bottom_right = st.columns(2)
+bottom_left.metric(
+    "雙模型綜合合理價",
+    f"{blend_base_row['綜合合理價']:,.1f}",
+    f"{valuation_gap:+.1f}% vs 現價",
+    border=True,
+)
+bottom_right.metric(
+    "兩種估值比較",
+    f"P/E 法 {base_row['合理價格']:,.1f}",
+    f"EV/EBITDA 法 {ev_base_row['合理價格']:,.1f}",
+    border=True,
+    delta_color="off",
+)
 
 left, right = st.columns([1.15, 0.85])
 with left:
