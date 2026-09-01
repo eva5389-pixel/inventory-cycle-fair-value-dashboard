@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from io import StringIO
+import zlib
 
 import altair as alt
 import numpy as np
@@ -32,6 +33,11 @@ MARKETS = {
     "韓國｜KOSPI": {"ticker": "^KS11", "price": 6839.2, "eps": 1028.3, "pe": 6.5, "demand": 12.0, "inventory": 8.0, "prev_demand": 14.0, "prev_inventory": 6.0},
     "中國｜上證指數": {"ticker": "000001.SS", "price": 3961.5, "eps": 282.8, "pe": 13.0, "demand": 4.5, "inventory": 3.0, "prev_demand": 5.1, "prev_inventory": 2.4},
     "香港｜恆生指數": {"ticker": "^HSI", "price": 25000.0, "eps": 1650.0, "pe": 10.5, "demand": 3.0, "inventory": 2.0, "prev_demand": 2.2, "prev_inventory": 2.8},
+    "德國｜DAX": {"ticker": "^GDAXI", "price": 24500.0, "eps": 1420.0, "pe": 15.5, "demand": 1.8, "inventory": 2.5, "prev_demand": 1.2, "prev_inventory": 3.1},
+    "英國｜FTSE 100": {"ticker": "^FTSE", "price": 9200.0, "eps": 610.0, "pe": 13.5, "demand": 1.5, "inventory": 1.8, "prev_demand": 1.0, "prev_inventory": 2.2},
+    "法國｜CAC 40": {"ticker": "^FCHI", "price": 8100.0, "eps": 520.0, "pe": 14.5, "demand": 1.6, "inventory": 2.0, "prev_demand": 1.1, "prev_inventory": 2.5},
+    "澳洲｜ASX 200": {"ticker": "^AXJO", "price": 8900.0, "eps": 485.0, "pe": 17.0, "demand": 2.4, "inventory": 2.1, "prev_demand": 2.0, "prev_inventory": 2.6},
+    "巴西｜Bovespa": {"ticker": "^BVSP", "price": 140000.0, "eps": 11200.0, "pe": 10.5, "demand": 3.2, "inventory": 2.7, "prev_demand": 2.6, "prev_inventory": 3.3},
 }
 
 
@@ -60,6 +66,37 @@ def demo_history(seed: int, months: int = 72) -> pd.DataFrame:
     inventory = 3.0 + 6.0 * np.sin(angle - np.pi / 2) + rng.normal(0, 0.7, months)
     price = 100 * np.exp(np.cumsum(0.006 + demand / 500 + rng.normal(0, 0.025, months)))
     return pd.DataFrame({"Date": dates, "DemandGrowth": demand, "InventoryGrowth": inventory, "Price": price})
+
+
+def market_seed(market: str) -> int:
+    return zlib.crc32(market.encode("utf-8"))
+
+
+def sync_latest_assumptions(
+    frame: pd.DataFrame,
+    previous_demand: float,
+    previous_inventory: float,
+    demand_growth: float,
+    inventory_growth: float,
+    current_price: float,
+) -> pd.DataFrame:
+    """Put form assumptions into the last two observations so every chart and phase updates."""
+    out = frame.copy().sort_values("Date").reset_index(drop=True)
+    if len(out) < 2:
+        end = pd.Timestamp.today().normalize().replace(day=1)
+        out = pd.DataFrame({
+            "Date": [end - pd.offsets.MonthBegin(1), end],
+            "DemandGrowth": [previous_demand, demand_growth],
+            "InventoryGrowth": [previous_inventory, inventory_growth],
+            "Price": [current_price, current_price],
+        })
+    else:
+        out.loc[out.index[-2], ["DemandGrowth", "InventoryGrowth"]] = [previous_demand, previous_inventory]
+        out.loc[out.index[-1], ["DemandGrowth", "InventoryGrowth"]] = [demand_growth, inventory_growth]
+        if "Price" not in out:
+            out["Price"] = np.nan
+        out.loc[out.index[-1], "Price"] = current_price
+    return classify_history(out)
 
 
 def phase_strip(history: pd.DataFrame) -> alt.Chart:
@@ -102,7 +139,7 @@ if source_mode == "上傳歷史資料":
         st.subheader("上傳月資料")
         st.write("必要欄位：日期、需求年增率、庫存年增率；價格欄位可省略。也接受 Date、demand_growth、inventory_growth、price。")
         upload = st.file_uploader("CSV 檔案", type=["csv"])
-        sample = demo_history(abs(hash(selected_market)) % 10000).rename(columns={"Date": "日期", "DemandGrowth": "需求年增率", "InventoryGrowth": "庫存年增率", "Price": "價格"})
+        sample = demo_history(market_seed(selected_market)).rename(columns={"Date": "日期", "DemandGrowth": "需求年增率", "InventoryGrowth": "庫存年增率", "Price": "價格"})
         st.download_button("下載範例 CSV", sample.to_csv(index=False).encode("utf-8-sig"), "庫存循環資料範例.csv", "text/csv")
         if upload is not None:
             try:
@@ -111,7 +148,7 @@ if source_mode == "上傳歷史資料":
             except Exception as exc:
                 st.error(str(exc))
 
-history = classify_history(uploaded_history if uploaded_history is not None else demo_history(abs(hash(selected_market)) % 10000))
+history = classify_history(uploaded_history if uploaded_history is not None else demo_history(market_seed(selected_market)))
 if uploaded_history is not None and len(history) >= 2:
     demand_default = float(history["DemandGrowth"].iloc[-1])
     inventory_default = float(history["InventoryGrowth"].iloc[-1])
@@ -121,35 +158,47 @@ else:
     demand_default, inventory_default = defaults["demand"], defaults["inventory"]
     prev_demand_default, prev_inventory_default = defaults["prev_demand"], defaults["prev_inventory"]
 
-with st.form("assumptions"):
+with st.expander("這些預設數字怎麼來的？"):
+    st.markdown(
+        "- **目前指數／股價**：開啟即時行情時，優先讀取 Yahoo Finance 最新收盤；失敗才使用程式內備援值。\n"
+        "- **需求、庫存、EPS、P/E、EBITDA 與淨負債**：目前是示範模型假設，並非官方即時財報。請依實際資料覆寫，或上傳 CSV。\n"
+        "- **下面圖表**：最後兩期會套用此表單的前期與本期數字；按重新計算後，循環階段、線圖與合理價會一起更新。"
+    )
+
+market_key = str(market_seed(selected_market))
+with st.form(f"assumptions_{market_key}"):
     st.subheader("輸入本期假設")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        demand_growth = st.number_input("本期需求／營收年增率 %", value=float(demand_default), step=0.1)
-        previous_demand = st.number_input("前期需求／營收年增率 %", value=float(prev_demand_default), step=0.1)
+        demand_growth = st.number_input("本期需求／營收年增率 %", value=float(demand_default), step=0.1, key=f"demand_{market_key}")
+        previous_demand = st.number_input("前期需求／營收年增率 %", value=float(prev_demand_default), step=0.1, key=f"prev_demand_{market_key}")
     with c2:
-        inventory_growth = st.number_input("本期庫存年增率 %", value=float(inventory_default), step=0.1)
-        previous_inventory = st.number_input("前期庫存年增率 %", value=float(prev_inventory_default), step=0.1)
+        inventory_growth = st.number_input("本期庫存年增率 %", value=float(inventory_default), step=0.1, key=f"inventory_{market_key}")
+        previous_inventory = st.number_input("前期庫存年增率 %", value=float(prev_inventory_default), step=0.1, key=f"prev_inventory_{market_key}")
     with c3:
-        current_price = st.number_input("目前指數／股價", min_value=0.01, value=float(round(latest_market_price, 2)), step=1.0)
-        forward_eps = st.number_input("未來 12 個月 EPS", min_value=0.01, value=float(defaults["eps"]), step=1.0)
+        current_price = st.number_input("目前指數／股價", min_value=0.01, value=float(round(latest_market_price, 2)), step=1.0, key=f"price_{market_key}")
+        forward_eps = st.number_input("未來 12 個月 EPS", min_value=0.01, value=float(defaults["eps"]), step=1.0, key=f"eps_{market_key}")
     with c4:
-        historical_pe = st.number_input("歷史／同業合理本益比", min_value=1.0, value=float(defaults["pe"]), step=0.5)
-        discount_rate = st.number_input("目前折現率 %", min_value=0.1, value=7.5, step=0.25)
-        anchor_rate = st.number_input("長期基準折現率 %", min_value=0.1, value=7.0, step=0.25)
+        historical_pe = st.number_input("歷史／同業合理本益比", min_value=1.0, value=float(defaults["pe"]), step=0.5, key=f"pe_{market_key}")
+        discount_rate = st.number_input("目前折現率 %", min_value=0.1, value=7.5, step=0.25, key=f"discount_{market_key}")
+        anchor_rate = st.number_input("長期基準折現率 %", min_value=0.1, value=7.0, step=0.25, key=f"anchor_{market_key}")
     st.markdown("**企業價值模型假設**")
     e1, e2, e3, e4 = st.columns(4)
     with e1:
-        ebitda_per_share = st.number_input("未來12個月 EBITDA／股", min_value=0.01, value=float(defaults.get("ebitda_ps", defaults["eps"] * 1.6)), step=0.5)
+        ebitda_per_share = st.number_input("未來12個月 EBITDA／股", min_value=0.01, value=float(defaults.get("ebitda_ps", defaults["eps"] * 1.6)), step=0.5, key=f"ebitda_{market_key}")
     with e2:
-        historical_ev_multiple = st.number_input("合理 EV／EBITDA", min_value=1.0, value=float(defaults.get("ev_multiple", max(defaults["pe"] * 0.65, 4))), step=0.5)
+        historical_ev_multiple = st.number_input("合理 EV／EBITDA", min_value=1.0, value=float(defaults.get("ev_multiple", max(defaults["pe"] * 0.65, 4))), step=0.5, key=f"ev_multiple_{market_key}")
     with e3:
-        net_debt_per_share = st.number_input("淨負債／股", value=float(defaults.get("net_debt_ps", 0.0)), step=0.5, help="總負債減現金，再除以流通股數；若淨現金請輸入負數。")
+        net_debt_per_share = st.number_input("淨負債／股", value=float(defaults.get("net_debt_ps", 0.0)), step=0.5, help="總負債減現金，再除以流通股數；若淨現金請輸入負數。", key=f"net_debt_{market_key}")
     with e4:
-        pe_weight_percent = st.slider("P/E 模型權重 %", min_value=0, max_value=100, value=60, step=5)
+        pe_weight_percent = st.slider("P/E 模型權重 %", min_value=0, max_value=100, value=60, step=5, key=f"pe_weight_{market_key}")
     submitted = st.form_submit_button("重新計算", type="primary", width="stretch")
 
 cycle = classify_cycle(demand_growth, inventory_growth, previous_demand, previous_inventory)
+history = sync_latest_assumptions(
+    history, previous_demand, previous_inventory, demand_growth,
+    inventory_growth, current_price
+)
 valuation = fair_value_scenarios(current_price, forward_eps, historical_pe, discount_rate, anchor_rate, cycle.phase)
 enterprise_valuation = enterprise_value_scenarios(
     current_price, ebitda_per_share, historical_ev_multiple, net_debt_per_share,
@@ -211,8 +260,21 @@ with tab1:
     )
     st.altair_chart(momentum_chart, width="stretch")
     price_frame = market_data.rename(columns={"Close": "市場價格"}) if not market_data.empty else history.rename(columns={"Price": "市場價格"})[["Date", "市場價格"]]
-    price_chart = alt.Chart(price_frame).mark_line(color="#70C7FF", strokeWidth=2).encode(x=alt.X("Date:T", title="日期"), y=alt.Y("市場價格:Q", scale=alt.Scale(zero=False)), tooltip=["Date:T", alt.Tooltip("市場價格:Q", format=",.2f")]).properties(height=300).interactive()
-    st.altair_chart(price_chart, width="stretch")
+    current_point = pd.DataFrame({"Date": [pd.Timestamp.today().normalize()], "市場價格": [current_price]})
+    price_frame = pd.concat([price_frame, current_point], ignore_index=True).dropna().sort_values("Date")
+    fair_lines = pd.DataFrame({
+        "情境": blended["情境"],
+        "合理價": blended["綜合合理價"],
+    })
+    price_chart = alt.Chart(price_frame).mark_line(color="#70C7FF", strokeWidth=2).encode(
+        x=alt.X("Date:T", title="日期"), y=alt.Y("市場價格:Q", scale=alt.Scale(zero=False)),
+        tooltip=["Date:T", alt.Tooltip("市場價格:Q", format=",.2f")]
+    )
+    fair_chart = alt.Chart(fair_lines).mark_rule(strokeDash=[6, 4]).encode(
+        y=alt.Y("合理價:Q"), color=alt.Color("情境:N", title="綜合合理價"),
+        tooltip=["情境:N", alt.Tooltip("合理價:Q", format=",.2f")]
+    )
+    st.altair_chart((price_chart + fair_chart).properties(height=320).interactive(), width="stretch")
 
 with tab2:
     st.subheader("EPS × 本益比合理價矩陣")
