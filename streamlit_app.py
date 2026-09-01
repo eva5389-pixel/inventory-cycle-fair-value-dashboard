@@ -21,6 +21,7 @@ from inventory_model import (
     overall_market_score,
     score_label,
 )
+from valuation_sources import MACROMICRO_URL, SIBLIS_URL, fetch_siblis_country_valuations, valuation_for_market
 
 
 st.set_page_config(page_title="庫存循環市場判讀", page_icon="🔄", layout="wide")
@@ -56,6 +57,15 @@ def market_prices(ticker: str, period: str = "5y") -> pd.DataFrame:
         return data[["Date", "Close"]].dropna().sort_values("Date")
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl="12h", max_entries=2, show_spinner=False)
+def public_valuation_data() -> tuple[pd.DataFrame, str]:
+    try:
+        frame, latest_column = fetch_siblis_country_valuations()
+        return frame, f"Siblis 更新日 {latest_column}"
+    except Exception as exc:
+        return pd.DataFrame(), f"Siblis 暫時無法讀取：{type(exc).__name__}"
 
 
 def demo_history(seed: int, months: int = 72) -> pd.DataFrame:
@@ -126,12 +136,21 @@ with st.sidebar:
     defaults = MARKETS[selected_market]
     source_mode = st.segmented_control("資料方式", ["快速試算", "上傳歷史資料"], default="快速試算")
     live_price = st.toggle("嘗試取得最新市場價格", value=True)
+    auto_valuation = st.toggle("讀取 Siblis 公開估值", value=True)
     st.divider()
     st.subheader("模型說明")
     st.markdown("需求與庫存動能交叉形成四階段。合理價同時計算 **EPS × P/E** 與 **EBITDA × EV/EBITDA－淨負債**。")
 
 market_data = market_prices(defaults["ticker"]) if live_price else pd.DataFrame()
 latest_market_price = float(market_data["Close"].iloc[-1]) if not market_data.empty else defaults["price"]
+valuation_source_frame, valuation_source_note = public_valuation_data() if auto_valuation else (pd.DataFrame(), "已關閉自動估值")
+source_valuation = valuation_for_market(valuation_source_frame, selected_market) if not valuation_source_frame.empty else None
+if source_valuation:
+    source_forward_pe = float(source_valuation["Forward本益比"])
+    source_forward_eps = latest_market_price / source_forward_pe
+else:
+    source_forward_pe = float(defaults["pe"])
+    source_forward_eps = float(defaults["eps"])
 
 uploaded_history = None
 if source_mode == "上傳歷史資料":
@@ -161,11 +180,28 @@ else:
 with st.expander("這些預設數字怎麼來的？"):
     st.markdown(
         "- **目前指數／股價**：開啟即時行情時，優先讀取 Yahoo Finance 最新收盤；失敗才使用程式內備援值。\n"
-        "- **需求、庫存、EPS、P/E、EBITDA 與淨負債**：目前是示範模型假設，並非官方即時財報。請依實際資料覆寫，或上傳 CSV。\n"
+        "- **P/E**：開啟自動估值時，使用 Siblis Research 公開表格的 forward P/E；完整日資料與 API 屬訂閱服務。\n"
+        "- **EPS**：Siblis 跨國表的 EPS 是基期 100 指數，不能直接乘上指數點位。本程式改用最新價格 ÷ Siblis forward P/E，反推同口徑的隱含 forward EPS。\n"
+        "- **MacroMicro**：跨國頁會阻擋雲端自動請求，因此保留外部查核連結，不繞過登入或網站限制。\n"
+        "- **需求、庫存、EBITDA 與淨負債**：仍是示範模型假設，請依實際資料覆寫，或上傳 CSV。\n"
         "- **下面圖表**：最後兩期會套用此表單的前期與本期數字；按重新計算後，循環階段、線圖與合理價會一起更新。"
     )
 
-market_key = str(market_seed(selected_market))
+with st.container(border=True):
+    s1, s2, s3, s4 = st.columns(4)
+    if source_valuation:
+        s1.metric("Siblis Forward P/E", f"{source_forward_pe:.2f}x", str(source_valuation["資料日期"]))
+        s2.metric("Siblis TTM P/E", f"{float(source_valuation['TTM本益比']):.2f}x")
+        s3.metric("Siblis TTM EPS 指數", f"{float(source_valuation['TTM_EPS指數']):.2f}", "基期100，非實際EPS")
+        s4.metric("反推 Forward EPS", f"{source_forward_eps:,.2f}", "現價 ÷ Forward P/E")
+        st.caption("來源：Siblis Research 公開跨國估值表。完整每日資料需使用其訂閱 API。")
+    else:
+        st.warning(f"{valuation_source_note}；此市場改用手動／備援估值假設。")
+    link1, link2 = st.columns(2)
+    link1.link_button("開啟 Siblis 原始資料", SIBLIS_URL, width="stretch")
+    link2.link_button("開啟 MacroMicro 跨國本益比", MACROMICRO_URL, width="stretch")
+
+market_key = f"{market_seed(selected_market)}_{'siblis' if source_valuation else 'manual'}"
 with st.form(f"assumptions_{market_key}"):
     st.subheader("輸入本期假設")
     c1, c2, c3, c4 = st.columns(4)
@@ -177,9 +213,9 @@ with st.form(f"assumptions_{market_key}"):
         previous_inventory = st.number_input("前期庫存年增率 %", value=float(prev_inventory_default), step=0.1, key=f"prev_inventory_{market_key}")
     with c3:
         current_price = st.number_input("目前指數／股價", min_value=0.01, value=float(round(latest_market_price, 2)), step=1.0, key=f"price_{market_key}")
-        forward_eps = st.number_input("未來 12 個月 EPS", min_value=0.01, value=float(defaults["eps"]), step=1.0, key=f"eps_{market_key}")
+        forward_eps = st.number_input("未來 12 個月 EPS", min_value=0.01, value=float(source_forward_eps), step=1.0, key=f"eps_{market_key}")
     with c4:
-        historical_pe = st.number_input("歷史／同業合理本益比", min_value=1.0, value=float(defaults["pe"]), step=0.5, key=f"pe_{market_key}")
+        historical_pe = st.number_input("歷史／同業合理本益比", min_value=1.0, value=float(source_forward_pe), step=0.5, key=f"pe_{market_key}")
         discount_rate = st.number_input("目前折現率 %", min_value=0.1, value=7.5, step=0.25, key=f"discount_{market_key}")
         anchor_rate = st.number_input("長期基準折現率 %", min_value=0.1, value=7.0, step=0.25, key=f"anchor_{market_key}")
     st.markdown("**企業價值模型假設**")
