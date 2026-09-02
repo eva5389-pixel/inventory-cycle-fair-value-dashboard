@@ -142,40 +142,43 @@ def business_cycle_history(history: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def cycle_framework_chart(current_phase: str) -> alt.Chart:
-    """Draw the four-stage demand/inventory framework as a conceptual matrix."""
-    quadrants = pd.DataFrame(
-        [
-            {"x1": -1, "x2": 0, "y1": 0, "y2": 1, "x": -0.5, "y": 0.63, "phase": "主動去庫存", "position": "復甦初期", "reading": "需求改善、庫存下降；股價常領先基本面回升"},
-            {"x1": 0, "x2": 1, "y1": 0, "y2": 1, "x": 0.5, "y": 0.63, "phase": "主動補庫存", "position": "擴張期", "reading": "需求改善、庫存增加；訂單與獲利通常較強"},
-            {"x1": 0, "x2": 1, "y1": -1, "y2": 0, "x": 0.5, "y": -0.37, "phase": "被動補庫存", "position": "放緩／景氣後期", "reading": "需求轉弱、庫存增加；留意庫存與獲利下修"},
-            {"x1": -1, "x2": 0, "y1": -1, "y2": 0, "x": -0.5, "y": -0.37, "phase": "被動去庫存", "position": "收縮期", "reading": "需求轉弱、庫存下降；後段等待下一輪復甦"},
-        ]
+def cycle_framework_html(current_phase: str) -> str:
+    """Draw a responsive four-stage matrix with an animated current marker."""
+    cells = [
+        ("主動去庫存", "復甦初期", "需求改善、庫存下降", "#20C7B7", "rgba(32,199,183,.15)"),
+        ("主動補庫存", "擴張期", "需求改善、庫存增加", "#3B82F6", "rgba(59,130,246,.16)"),
+        ("被動去庫存", "收縮期", "需求轉弱、庫存下降", "#FF4B4B", "rgba(255,75,75,.15)"),
+        ("被動補庫存", "放緩／景氣後期", "需求轉弱、庫存增加", "#FFA000", "rgba(255,160,0,.16)"),
+    ]
+    cards = "".join(
+        f'''<div class="cycle-cell{' active' if phase == current_phase else ''}" style="--accent:{color};--surface:{surface}">
+            {'<div class="current-star" aria-label="目前位置"><span>★</span><small>目前</small></div>' if phase == current_phase else ''}
+            <strong>{phase}</strong><span>{position}</span><small>{reading}</small>
+        </div>'''
+        for phase, position, reading, color, surface in cells
     )
-    quadrants["目前"] = quadrants["phase"].eq(current_phase)
-    colors = alt.Scale(domain=list(PHASES), range=[PHASES[p]["color"] for p in PHASES])
-    background = alt.Chart(quadrants).mark_rect(opacity=0.18, stroke="#64748B", strokeWidth=1).encode(
-        x=alt.X("x1:Q", title="庫存動能　← 下降　　　　　　　　　增加 →", scale=alt.Scale(domain=[-1, 1]), axis=alt.Axis(values=[])),
-        x2="x2:Q",
-        y=alt.Y("y1:Q", title="需求動能　← 轉弱　　　　　　改善 →", scale=alt.Scale(domain=[-1, 1]), axis=alt.Axis(values=[])),
-        y2="y2:Q",
-        color=alt.Color("phase:N", scale=colors, legend=None),
-        tooltip=[alt.Tooltip("phase:N", title="庫存循環"), alt.Tooltip("position:N", title="景氣位置"), alt.Tooltip("reading:N", title="市場解讀")],
-    )
-    phase_labels = alt.Chart(quadrants).mark_text(fontSize=20, fontWeight="bold", dy=-18).encode(
-        x="x:Q", y="y:Q", text="phase:N", color=alt.Color("phase:N", scale=colors, legend=None)
-    )
-    position_labels = alt.Chart(quadrants).mark_text(fontSize=14, color="#94A3B8", dy=16).encode(
-        x="x:Q", y="y:Q", text="position:N"
-    )
-    current = quadrants.loc[quadrants["目前"]].copy()
-    glow_outer = alt.Chart(current).mark_text(text="★", fontSize=58, color="#FFD54F", opacity=0.12).encode(x="x:Q", y="y:Q")
-    glow_inner = alt.Chart(current).mark_text(text="★", fontSize=44, color="#FFE082", opacity=0.32).encode(x="x:Q", y="y:Q")
-    marker = alt.Chart(current).mark_text(text="★", fontSize=30, color="#FFD700", stroke="#FFF3B0", strokeWidth=0.8).encode(
-        x="x:Q", y="y:Q"
-    )
-    marker_label = alt.Chart(current).mark_text(text="目前", fontSize=13, fontWeight="bold", color="#FFF3B0", dy=31).encode(x="x:Q", y="y:Q")
-    return (background + phase_labels + position_labels + glow_outer + glow_inner + marker + marker_label).properties(height=420)
+    return f"""
+    <style>
+      .cycle-wrap {{position:relative;padding:18px 8px 38px 54px}}
+      .cycle-grid {{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #334155}}
+      .cycle-cell {{position:relative;min-height:185px;padding:42px 86px 30px 28px;background:var(--surface);border:1px solid #334155;display:flex;flex-direction:column;justify-content:center;gap:8px}}
+      .cycle-cell strong {{font-size:clamp(20px,2.2vw,32px);color:var(--accent)}}
+      .cycle-cell > span {{font-size:18px;color:#CBD5E1}}
+      .cycle-cell > small {{font-size:14px;color:#94A3B8}}
+      .axis-y {{position:absolute;left:0;top:50%;transform:translateY(-50%);writing-mode:vertical-rl;color:#CBD5E1;font-weight:700}}
+      .axis-x {{position:absolute;left:54px;right:8px;bottom:4px;text-align:center;color:#CBD5E1;font-weight:700}}
+      .current-star {{position:absolute;right:24px;top:20px;width:58px;text-align:center;color:#FFD700;z-index:2}}
+      .current-star span {{display:block;font-size:36px;line-height:1;animation:star-pulse 1.7s ease-in-out infinite}}
+      .current-star small {{display:block;margin-top:5px;color:#FFF3B0;font-size:13px;font-weight:800}}
+      @keyframes star-pulse {{0%,100%{{transform:scale(.92);filter:drop-shadow(0 0 4px rgba(255,215,0,.55))}}50%{{transform:scale(1.12);filter:drop-shadow(0 0 7px #FFD700) drop-shadow(0 0 18px rgba(255,193,7,.9))}}}}
+      @media (max-width:700px) {{.cycle-wrap{{padding-left:8px}}.cycle-grid{{grid-template-columns:1fr}}.axis-y{{display:none}}.cycle-cell{{min-height:150px;padding-left:22px}}}}
+    </style>
+    <div class="cycle-wrap">
+      <div class="axis-y">需求動能　↑ 改善　↓ 轉弱</div>
+      <div class="cycle-grid">{cards}</div>
+      <div class="axis-x">庫存動能　← 下降　　　　　　增加 →</div>
+    </div>
+    """
 
 
 st.title("庫存循環、股票獲利與企業價值")
@@ -429,7 +432,7 @@ st.caption("兩組循環使用相同月資料與本頁假設；上傳實際歷�
 
 with st.container(border=True):
     st.subheader("景氣循環 × 庫存循環對照圖")
-    st.altair_chart(cycle_framework_chart(cycle.phase), width="stretch")
+    st.html(cycle_framework_html(cycle.phase))
     st.caption(f"目前模型位於「{cycle.phase}」：{PHASES[cycle.phase]['quadrant']}，對應 {PHASES[cycle.phase]['signal']}。金色星星為目前位置。")
 
 business_history = business_cycle_history(history).dropna(subset=["DemandMomentum"]).copy()
