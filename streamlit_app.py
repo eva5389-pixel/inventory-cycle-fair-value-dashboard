@@ -127,6 +127,21 @@ def phase_strip(history: pd.DataFrame) -> alt.Chart:
     )
 
 
+def business_cycle_history(history: pd.DataFrame) -> pd.DataFrame:
+    """Create a transparent demand-based business-cycle proxy from the active history."""
+    out = history.copy().sort_values("Date").reset_index(drop=True)
+    out["DemandMomentum"] = out["DemandGrowth"].diff()
+    conditions = [
+        (out["DemandGrowth"] >= 0) & (out["DemandMomentum"] >= 0),
+        (out["DemandGrowth"] >= 0) & (out["DemandMomentum"] < 0),
+        (out["DemandGrowth"] < 0) & (out["DemandMomentum"] < 0),
+        (out["DemandGrowth"] < 0) & (out["DemandMomentum"] >= 0),
+    ]
+    out["BusinessPhase"] = np.select(conditions, ["擴張", "放緩", "收縮", "復甦"], default="資料不足")
+    out["BusinessScore"] = np.clip(50 + out["DemandGrowth"] * 2 + out["DemandMomentum"] * 4, 0, 100)
+    return out
+
+
 st.title("庫存循環、股票獲利與企業價值")
 st.caption("以庫存循環判斷景氣位置，再用 P/E 與 EV/EBITDA 雙模型估算股票合理價。所有結果均可調整假設，不是投資建議。")
 
@@ -371,4 +386,87 @@ with tab4:
 
 result = blended.assign(市場=selected_market, 循環階段=cycle.phase, 市場分數=market_score, 分析日期=date.today().isoformat())
 st.download_button("下載本次分析結果", result.to_csv(index=False).encode("utf-8-sig"), f"{selected_market.split('｜')[0]}_庫存循環合理價.csv", "text/csv")
+
+st.divider()
+st.header("景氣循環與庫存循環總覽")
+st.caption("兩組循環使用相同月資料與本頁假設；上傳實際歷史資料後會同步重算。景氣分數是需求水準與需求動能的模型指標，並非官方領先指標。")
+
+business_history = business_cycle_history(history).dropna(subset=["DemandMomentum"]).copy()
+business_colors = alt.Scale(
+    domain=["復甦", "擴張", "放緩", "收縮"],
+    range=["#29B6A6", "#3B82F6", "#F59E0B", "#EF4444"],
+)
+
+with st.container(border=True):
+    st.subheader("景氣循環圖與近 12 期表")
+    business_line = alt.Chart(business_history).mark_line(color="#94A3B8", strokeWidth=2).encode(
+        x=alt.X("Date:T", title="日期"),
+        y=alt.Y("BusinessScore:Q", title="景氣循環分數", scale=alt.Scale(domain=[0, 100])),
+    )
+    business_points = alt.Chart(business_history).mark_circle(size=80).encode(
+        x=alt.X("Date:T", title="日期"),
+        y=alt.Y("BusinessScore:Q", title="景氣循環分數", scale=alt.Scale(domain=[0, 100])),
+        color=alt.Color("BusinessPhase:N", title="景氣階段", scale=business_colors),
+        tooltip=[
+            alt.Tooltip("Date:T", title="日期", format="%Y-%m"),
+            alt.Tooltip("BusinessPhase:N", title="景氣階段"),
+            alt.Tooltip("DemandGrowth:Q", title="需求年增率", format="+.2f"),
+            alt.Tooltip("DemandMomentum:Q", title="需求動能", format="+.2f"),
+            alt.Tooltip("BusinessScore:Q", title="景氣分數", format=".1f"),
+        ],
+    )
+    st.altair_chart((business_line + business_points).properties(height=330).interactive(), width="stretch")
+    business_table = business_history.tail(12)[["Date", "DemandGrowth", "DemandMomentum", "BusinessPhase", "BusinessScore"]].rename(columns={
+        "Date": "日期", "DemandGrowth": "需求年增率%", "DemandMomentum": "需求動能變化", "BusinessPhase": "景氣階段", "BusinessScore": "景氣分數",
+    })
+    st.dataframe(
+        business_table.sort_values("日期", ascending=False), hide_index=True, width="stretch",
+        column_config={
+            "日期": st.column_config.DateColumn(format="YYYY-MM"),
+            "需求年增率%": st.column_config.NumberColumn(format="%+.2f%%"),
+            "需求動能變化": st.column_config.NumberColumn(format="%+.2f"),
+            "景氣分數": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+
+with st.container(border=True):
+    st.subheader("庫存循環四象限圖與近 12 期表")
+    inventory_history = history.dropna(subset=["DemandMomentum", "InventoryMomentum"]).copy().tail(24)
+    inventory_history["最新一期"] = False
+    if not inventory_history.empty:
+        inventory_history.loc[inventory_history.index[-1], "最新一期"] = True
+    zero_rules = pd.DataFrame({"zero": [0]})
+    vertical_zero = alt.Chart(zero_rules).mark_rule(color="#64748B", strokeDash=[5, 5]).encode(x="zero:Q")
+    horizontal_zero = alt.Chart(zero_rules).mark_rule(color="#64748B", strokeDash=[5, 5]).encode(y="zero:Q")
+    quadrant_points = alt.Chart(inventory_history).mark_circle(opacity=0.85).encode(
+        x=alt.X("InventoryMomentum:Q", title="庫存動能變化（百分點）"),
+        y=alt.Y("DemandMomentum:Q", title="需求動能變化（百分點）"),
+        color=alt.Color("Phase:N", title="庫存循環", scale=alt.Scale(domain=list(PHASES), range=[PHASES[p]["color"] for p in PHASES])),
+        size=alt.Size("最新一期:N", legend=None, scale=alt.Scale(domain=[False, True], range=[65, 260])),
+        tooltip=[
+            alt.Tooltip("Date:T", title="日期", format="%Y-%m"),
+            alt.Tooltip("Phase:N", title="循環階段"),
+            alt.Tooltip("DemandMomentum:Q", title="需求動能", format="+.2f"),
+            alt.Tooltip("InventoryMomentum:Q", title="庫存動能", format="+.2f"),
+        ],
+    )
+    st.altair_chart((quadrant_points + vertical_zero + horizontal_zero).properties(height=390).interactive(), width="stretch")
+    st.caption("右上＝主動補庫存、左上＝主動去庫存、右下＝被動補庫存、左下＝被動去庫存；較大的圓點是最新一期。")
+    inventory_table = history.dropna(subset=["DemandMomentum", "InventoryMomentum"]).tail(12)[[
+        "Date", "DemandGrowth", "InventoryGrowth", "DemandMomentum", "InventoryMomentum", "Phase"
+    ]].rename(columns={
+        "Date": "日期", "DemandGrowth": "需求年增率%", "InventoryGrowth": "庫存年增率%",
+        "DemandMomentum": "需求動能變化", "InventoryMomentum": "庫存動能變化", "Phase": "庫存循環階段",
+    })
+    st.dataframe(
+        inventory_table.sort_values("日期", ascending=False), hide_index=True, width="stretch",
+        column_config={
+            "日期": st.column_config.DateColumn(format="YYYY-MM"),
+            "需求年增率%": st.column_config.NumberColumn(format="%+.2f%%"),
+            "庫存年增率%": st.column_config.NumberColumn(format="%+.2f%%"),
+            "需求動能變化": st.column_config.NumberColumn(format="%+.2f"),
+            "庫存動能變化": st.column_config.NumberColumn(format="%+.2f"),
+        },
+    )
+
 st.caption("內建數字是示範假設；若要正式研究，請以上傳的公司／市場實際庫存、需求與 EPS 資料取代。")
