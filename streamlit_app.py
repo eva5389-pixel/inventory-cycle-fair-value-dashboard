@@ -142,6 +142,40 @@ def business_cycle_history(history: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def cycle_framework_chart(current_phase: str) -> alt.Chart:
+    """Draw the four-stage demand/inventory framework as a conceptual matrix."""
+    quadrants = pd.DataFrame(
+        [
+            {"x1": -1, "x2": 0, "y1": 0, "y2": 1, "x": -0.5, "y": 0.63, "phase": "主動去庫存", "position": "復甦初期", "reading": "需求改善、庫存下降；股價常領先基本面回升"},
+            {"x1": 0, "x2": 1, "y1": 0, "y2": 1, "x": 0.5, "y": 0.63, "phase": "主動補庫存", "position": "擴張期", "reading": "需求改善、庫存增加；訂單與獲利通常較強"},
+            {"x1": 0, "x2": 1, "y1": -1, "y2": 0, "x": 0.5, "y": -0.37, "phase": "被動補庫存", "position": "放緩／景氣後期", "reading": "需求轉弱、庫存增加；留意庫存與獲利下修"},
+            {"x1": -1, "x2": 0, "y1": -1, "y2": 0, "x": -0.5, "y": -0.37, "phase": "被動去庫存", "position": "收縮期", "reading": "需求轉弱、庫存下降；後段等待下一輪復甦"},
+        ]
+    )
+    quadrants["目前"] = quadrants["phase"].eq(current_phase)
+    colors = alt.Scale(domain=list(PHASES), range=[PHASES[p]["color"] for p in PHASES])
+    background = alt.Chart(quadrants).mark_rect(opacity=0.18, stroke="#64748B", strokeWidth=1).encode(
+        x=alt.X("x1:Q", title="庫存動能　← 下降　　　　　　　　　增加 →", scale=alt.Scale(domain=[-1, 1]), axis=alt.Axis(values=[])),
+        x2="x2:Q",
+        y=alt.Y("y1:Q", title="需求動能　← 轉弱　　　　　　改善 →", scale=alt.Scale(domain=[-1, 1]), axis=alt.Axis(values=[])),
+        y2="y2:Q",
+        color=alt.Color("phase:N", scale=colors, legend=None),
+        tooltip=[alt.Tooltip("phase:N", title="庫存循環"), alt.Tooltip("position:N", title="景氣位置"), alt.Tooltip("reading:N", title="市場解讀")],
+    )
+    phase_labels = alt.Chart(quadrants).mark_text(fontSize=20, fontWeight="bold", dy=-18).encode(
+        x="x:Q", y="y:Q", text="phase:N", color=alt.Color("phase:N", scale=colors, legend=None)
+    )
+    position_labels = alt.Chart(quadrants).mark_text(fontSize=14, color="#94A3B8", dy=16).encode(
+        x="x:Q", y="y:Q", text="position:N"
+    )
+    current = quadrants.loc[quadrants["目前"]].copy()
+    marker = alt.Chart(current).mark_point(shape="diamond", filled=True, size=230, color="#FFFFFF", stroke="#111827", strokeWidth=2).encode(
+        x="x:Q", y=alt.Y("y:Q")
+    )
+    marker_label = alt.Chart(current).mark_text(text="目前", fontSize=13, fontWeight="bold", color="#111827").encode(x="x:Q", y="y:Q")
+    return (background + phase_labels + position_labels + marker + marker_label).properties(height=420)
+
+
 st.title("庫存循環、股票獲利與企業價值")
 st.caption("以庫存循環判斷景氣位置，再用 P/E 與 EV/EBITDA 雙模型估算股票合理價。所有結果均可調整假設，不是投資建議。")
 
@@ -390,6 +424,11 @@ st.download_button("下載本次分析結果", result.to_csv(index=False).encode
 st.divider()
 st.header("景氣循環與庫存循環總覽")
 st.caption("兩組循環使用相同月資料與本頁假設；上傳實際歷史資料後會同步重算。景氣分數是需求水準與需求動能的模型指標，並非官方領先指標。")
+
+with st.container(border=True):
+    st.subheader("景氣循環 × 庫存循環對照圖")
+    st.altair_chart(cycle_framework_chart(cycle.phase), width="stretch")
+    st.caption(f"目前模型位於「{cycle.phase}」：{PHASES[cycle.phase]['quadrant']}，對應 {PHASES[cycle.phase]['signal']}。菱形標記為目前位置。")
 
 business_history = business_cycle_history(history).dropna(subset=["DemandMomentum"]).copy()
 business_colors = alt.Scale(
