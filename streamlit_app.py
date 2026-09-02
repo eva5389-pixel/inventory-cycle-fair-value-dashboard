@@ -169,11 +169,13 @@ def cycle_framework_chart(current_phase: str) -> alt.Chart:
         x="x:Q", y="y:Q", text="position:N"
     )
     current = quadrants.loc[quadrants["目前"]].copy()
-    marker = alt.Chart(current).mark_point(shape="diamond", filled=True, size=230, color="#FFFFFF", stroke="#111827", strokeWidth=2).encode(
-        x="x:Q", y=alt.Y("y:Q")
+    glow_outer = alt.Chart(current).mark_text(text="★", fontSize=58, color="#FFD54F", opacity=0.12).encode(x="x:Q", y="y:Q")
+    glow_inner = alt.Chart(current).mark_text(text="★", fontSize=44, color="#FFE082", opacity=0.32).encode(x="x:Q", y="y:Q")
+    marker = alt.Chart(current).mark_text(text="★", fontSize=30, color="#FFD700", stroke="#FFF3B0", strokeWidth=0.8).encode(
+        x="x:Q", y="y:Q"
     )
-    marker_label = alt.Chart(current).mark_text(text="目前", fontSize=13, fontWeight="bold", color="#111827").encode(x="x:Q", y="y:Q")
-    return (background + phase_labels + position_labels + marker + marker_label).properties(height=420)
+    marker_label = alt.Chart(current).mark_text(text="目前", fontSize=13, fontWeight="bold", color="#FFF3B0", dy=31).encode(x="x:Q", y="y:Q")
+    return (background + phase_labels + position_labels + glow_outer + glow_inner + marker + marker_label).properties(height=420)
 
 
 st.title("庫存循環、股票獲利與企業價值")
@@ -428,7 +430,7 @@ st.caption("兩組循環使用相同月資料與本頁假設；上傳實際歷�
 with st.container(border=True):
     st.subheader("景氣循環 × 庫存循環對照圖")
     st.altair_chart(cycle_framework_chart(cycle.phase), width="stretch")
-    st.caption(f"目前模型位於「{cycle.phase}」：{PHASES[cycle.phase]['quadrant']}，對應 {PHASES[cycle.phase]['signal']}。菱形標記為目前位置。")
+    st.caption(f"目前模型位於「{cycle.phase}」：{PHASES[cycle.phase]['quadrant']}，對應 {PHASES[cycle.phase]['signal']}。金色星星為目前位置。")
 
 business_history = business_cycle_history(history).dropna(subset=["DemandMomentum"]).copy()
 business_colors = alt.Scale(
